@@ -13,7 +13,7 @@ module HTTParty
     alias_method :parse_response_without_hack, :parse_response
     def parse_response(body)
       Rails.logger.info("RESPONSE>")
-      Rails.logger.info(body)
+      Rails.logger.info(body.sub(/<Base64LabelImage>.*<\/Base64LabelImage>/, '<Base64LabelImage>(image data stripped)</Base64LabelImage>'))
       Rails.logger.info("<RESPONSE")
 
       parse_response_without_hack(
