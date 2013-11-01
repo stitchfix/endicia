@@ -270,43 +270,59 @@ module Endicia
   # Returns a hash in the form:
   #
   #     {
-  #       :success => true, # or false
-  #       :error_message => "the message", # message describing success
-  #                                        # or failure
-  #       :form_number   => 12345, # Form Number for refunded label
-  #       :response_body => "the response body"
+  #       :success          => true,            # if all tracking numbers are approved or false
+  #                                             # Probably better to use tracking_number array
+  #       :error_message    => "the message",   # DEPRECATED message describing success or failure.
+  #                                             # Should instead look for messages in the :tracking_numbers array
+  #       :form_number      => 12345,           # Form Number for refunded label
+  #       :tracking_numbers => [                # An array with information about all requested tracking numbers
+  #         :pic_number => '123456789',         # the tracking number you requested
+  #         :approved => true,                  # or false
+  #         :message => "the message"           # message describing success or failure
+  #       ]
+  #       :response_body => "the response body" # the raw HTTP response
   #     }
   def self.refund_request(tracking_number, options = {})
+    # If we didn't get an array of tracking numbers make it one for simplicity
+    tracking_numbers = tracking_number.is_a?(Array) ? tracking_number : [tracking_number]
+
     xml = Builder::XmlMarkup.new.RefundRequest do |xml|
       xml.AccountID(options[:AccountID] || defaults[:AccountID])
       xml.PassPhrase(options[:PassPhrase] || defaults[:PassPhrase])
       xml.Test(options[:Test] || defaults[:Test] || "NO")
-      xml.RefundList { |xml| xml.PICNumber(tracking_number) }
+      xml.RefundList { |xml| tracking_numbers.collect{ |tracking_number| xml.PICNumber(tracking_number) } }
     end
 
     params = { :method => 'RefundRequest', :XMLInput => URI.encode(xml) }
     result = self.get(els_service_url(params))
 
     response = {
-      :success => false,
+      :success => true,
       :error_message => nil,
-      :response_body => result.body
+      :response_body => result.body,
+      :tracking_numbers => []
     }
 
-    # TODO: It is possible to make a batch refund request, currently this only
-    #       supports one at a time. The response that comes back is not parsed
-    #       well by HTTParty. So we have to assume there is only one IsApproved
-    #       and ErrorMsg in order to return them
     if result && result = result['RefundResponse']
       unless response[:error_message] = result['ErrorMsg']
         response[:form_number]   = result['FormNumber']
 
         result = result['RefundList']['PICNumber']
-        # match against the raw response because httpparty seems to be chucking
-        # the invalid xml w/in PICNumber
-        raw_response = response[:response_body]
-        response[:success]       = (raw_response.match(/<IsApproved>YES<\/IsApproved>/) ? true : false)
-        response[:error_message] = raw_response.match(/<ErrorMsg>(.+)<\/ErrorMsg>/)[1]
+        if result
+          # If we didn't get an array make it one for simplicity
+          result = result.is_a?(Array) ? result : [result]
+          result.each do |r|
+            approved = r['IsApproved']['__content__'] == 'YES' ? true : false
+            response[:tracking_numbers] << {
+              :pic_number => r['__content__'].try(:strip),
+              :approved => approved,
+              :message => r['ErrorMsg']['__content__'].try(:strip)
+            }
+            response[:success] = response[:success] && approved
+          end
+        end
+        # set error_message to the first one in tracking numbers array
+        response[:error_message] = response[:tracking_numbers].first[:message] rescue nil
       end
     end
 
