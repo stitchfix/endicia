@@ -421,8 +421,12 @@ module Endicia
   # Pass options hash with :Test => "YES" to return the url of the test server
   # (this matches the Test attribute/node value for most API calls).
   def self.label_service_url(options = {})
-    test = (options[:Test] || defaults[:Test] || "NO").upcase == "YES"
-    url = test ? "https://www.envmgr.com" : "https://LabelServer.Endicia.com"
+    if options[:Test] == "SANDBOX"
+      url = "https://elstestserver.endicia.com"
+    else
+      test = (options[:Test] || defaults[:Test] || "NO").upcase == "YES"
+      url = test ? "https://www.envmgr.com" : "https://LabelServer.Endicia.com"
+    end
     "#{url}/LabelService/EwsLabelService.asmx"
   end
 
