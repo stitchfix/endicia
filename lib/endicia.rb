@@ -67,6 +67,7 @@ module Endicia
     opts = defaults.merge(opts)
     opts[:Test] ||= "NO"
     url = "#{label_service_url(opts)}/GetPostageLabelXML"
+    opts = clean_options(opts)
     insurance = extract_insurance(opts)
     handle_extended_zip_code(opts)
 
@@ -124,6 +125,9 @@ module Endicia
   #       :response_body => "the response body"
   #     }
   def self.change_pass_phrase(new_phrase, options = {})
+    url = "#{label_service_url(options)}/ChangePassPhraseXML"
+    options = clean_options(options)
+
     xml = Builder::XmlMarkup.new
     body = "changePassPhraseRequestXML=" + xml.ChangePassPhraseRequest do |xml|
       authorize_request(xml, options)
@@ -131,7 +135,6 @@ module Endicia
       xml.RequestID "CPP#{Time.now.to_f}"
     end
 
-    url = "#{label_service_url(options)}/ChangePassPhraseXML"
     result = self.post(url, { :body => body })
     parse_result(result, "ChangePassPhraseRequestResponse")
   end
@@ -166,14 +169,16 @@ module Endicia
   #       :response_body => "the response body"
   #     }
   def self.buy_postage(amount, options = {})
+
+    url = "#{label_service_url(options)}/BuyPostageXML"
+    options = clean_options(options)
+
     xml = Builder::XmlMarkup.new
     body = "recreditRequestXML=" + xml.RecreditRequest do |xml|
       authorize_request(xml, options)
       xml.RecreditAmount amount
       xml.RequestID "BP#{Time.now.to_f}"
     end
-
-    url = "#{label_service_url(options)}/BuyPostageXML"
     result = self.post(url, { :body => body })
     parse_result(result, "RecreditRequestResponse")
   end
@@ -203,6 +208,7 @@ module Endicia
   #       :response_body => "the response body"
   #     }
   def self.status_request(tracking_number, options = {})
+    options = clean_options(options)
     xml = Builder::XmlMarkup.new.StatusRequest do |xml|
       xml.AccountID(options[:AccountID] || defaults[:AccountID])
       xml.PassPhrase(options[:PassPhrase] || defaults[:PassPhrase])
@@ -283,6 +289,7 @@ module Endicia
   #       :response_body => "the response body" # the raw HTTP response
   #     }
   def self.refund_request(tracking_number, options = {})
+    options = clean_options(options)
     # If we didn't get an array of tracking numbers make it one for simplicity
     tracking_numbers = tracking_number.is_a?(Array) ? tracking_number : [tracking_number]
 
@@ -357,6 +364,7 @@ module Endicia
   #       :response_body => "the response body"
   #     }
   def self.carrier_pickup_request(tracking_number, package_location, options = {})
+    options = clean_options(options)
     xml = Builder::XmlMarkup.new.CarrierPickupRequest do |xml|
       xml.AccountID(options.delete(:AccountID) || defaults[:AccountID])
       xml.PassPhrase(options.delete(:PassPhrase) || defaults[:PassPhrase])
@@ -448,6 +456,11 @@ module Endicia
     end
 
     @defaults || {}
+  end
+
+  def self.clean_options(options)
+    options[:Test] = 'YES' if options[:Test] == 'SANDBOX'
+    options
   end
 
   def self.parse_result(result, root)
