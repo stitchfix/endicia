@@ -12,10 +12,6 @@ module HTTParty
   class Request
     alias_method :parse_response_without_hack, :parse_response
     def parse_response(body)
-      Rails.logger.info("RESPONSE>")
-      Rails.logger.info(body.sub(/<Base64LabelImage>.*<\/Base64LabelImage>/, '<Base64LabelImage>(image data stripped)</Base64LabelImage>'))
-      Rails.logger.info("<RESPONSE")
-
       parse_response_without_hack(
         body.sub(/xmlns=("|')(www.envmgr.com|LabelServer.Endicia.com)/, 'xmlns=\1https://\2'))
     end
@@ -63,20 +59,21 @@ module Endicia
   #       ...
   #
   # Returns a Endicia::Label object.
-  def self.get_label(opts={})
-    opts = defaults.merge(opts)
-    opts[:Test] ||= "NO"
-    url = "#{label_service_url(opts)}/GetPostageLabelXML"
-    opts = clean_options(opts)
-    insurance = extract_insurance(opts)
-    handle_extended_zip_code(opts)
+  def self.get_label(options = {})
+    # Next couple of line should be extracted to a method for reuse elsewhere
+    options = defaults.merge(options)
+    api_values, other_options = extract_api_values(options)
+    url = "#{label_service_url(api_values, other_options)}/GetPostageLabelXML"
+
+    insurance = extract_insurance(api_values)
+    handle_extended_zip_code(api_values)
 
     root_keys = :LabelType, :Test, :LabelSize, :ImageFormat, :ImageResolution
-    root_attributes = extract(opts, root_keys)
+    root_attributes = extract(api_values, root_keys)
     root_attributes[:LabelType] ||= "Default"
 
     dimension_keys = :Length, :Width, :Height
-    mailpiece_dimenions = extract(opts, dimension_keys)
+    mailpiece_dimenions = extract(api_values, dimension_keys)
 
     xml = Builder::XmlMarkup.new
     body = "labelRequestXML=" + xml.LabelRequest(root_attributes) do |xm|
@@ -89,7 +86,11 @@ module Endicia
       end
     end
 
+
+    log("ENDICIA LABEL REQUEST: #{body.gsub("\n", '')}") if other_options[:log_requests] == true
+
     result = self.post(url, :body => body)
+    log("ENDICIA LABEL RESPONSE]#{result.body.to_s.sub(/<Base64LabelImage>.*<\/Base64LabelImage>/, '<Base64LabelImage>(image data stripped)</Base64LabelImage>').gsub("\n", '')}") if other_options[:log_responses] == true
     Endicia::Label.new(result).tap do |the_label|
       the_label.request_body = body.to_s
       the_label.request_url = url
@@ -218,10 +219,10 @@ module Endicia
     end
 
     if options[:logger]
-      options[:logger].info("ENDICIA REQUEST: #{tracking_number}")
-      options[:logger].info("\n[REQUEST]")
+      options[:logger].info("ENDICIA TRACKING REQUEST: #{tracking_number}")
+      options[:logger].info("\n[ENDICIA TRACKING REQUEST]")
       options[:logger].info(xml)
-      options[:logger].info("[ENDREQUEST]")
+      options[:logger].info("[END ENDICIA TRACKING REQUEST]")
     end
 
     params = { :method => 'StatusRequest', :XMLInput => URI.encode(xml) }
@@ -236,9 +237,9 @@ module Endicia
     }
 
     if options[:logger]
-      options[:logger].info("\n[RESPONSE]")
+      options[:logger].info("\n[ENDICIA TRACKING RESPONSE]")
       options[:logger].info(xml)
-      options[:logger].info("[ENDRESPONSE]")
+      options[:logger].info("[END ENDICIA TRACKING RESPONSE]")
     end
 
     # TODO: It is possible to make a batch status request, currently this only
@@ -426,16 +427,20 @@ module Endicia
   end
 
   # Return the url for making requests.
-  # Pass options hash with :Test => "YES" to return the url of the test server
+  # Pass api_values hash with :Test => "YES" to return the url of the test server
   # (this matches the Test attribute/node value for most API calls).
-  def self.label_service_url(options = {})
-    if options[:Test] == "SANDBOX"
-      url = "https://elstestserver.endicia.com"
+  # Also pass other_options hash with :sandbox => true to use the sandbox server in test mode.
+  def self.label_service_url(api_values = {}, other_options = {})
+    if api_values[:Test].try(:upcase) == "YES"
+      if other_options[:sandbox] == true
+        host = "https://elstestserver.endicia.com"
+      else
+        host = "https://www.envmgr.com"
+      end
     else
-      test = (options[:Test] || defaults[:Test] || "NO").upcase == "YES"
-      url = test ? "https://www.envmgr.com" : "https://LabelServer.Endicia.com"
+      host = "https://LabelServer.Endicia.com"
     end
-    "#{url}/LabelService/EwsLabelService.asmx"
+    "#{host}/LabelService/EwsLabelService.asmx"
   end
 
   # Some requests use the ELS service url. This URL is used for requests that
@@ -455,12 +460,32 @@ module Endicia
       end
     end
 
-    @defaults || {}
+    @defaults ||= {}
+    @defaults[:Test] ||= "NO"
+    @defaults
   end
 
-  def self.clean_options(options)
-    options[:Test] = 'YES' if options[:Test] == 'SANDBOX'
-    options
+
+  # Given a hash of options, return a list with the api_values separate from other_options for the gem.
+  # api_values should be built into the XML request and other_options are to dictate gem behavior.
+  # They are combined initially so that other_options can take advantage of YML set defaults in Rails applications.
+  NON_API_OPTION_KEYS = [:sandbox, :log_requests]
+  def self.extract_api_values(options)
+    other_options = {}
+    NON_API_OPTION_KEYS.each do |key|
+      other_options[key] = options.delete(:key)
+    end
+    api_values = options
+    api_values[:Test] = 'YES' if other_options[:sandbox] == true
+    api_values, other_options
+  end
+
+  def self.log(message, level: :info)
+    if defined?(Rails)
+      Rails.logger.send(level, message)
+    else
+      puts message
+    end
   end
 
   def self.parse_result(result, root)
